@@ -44,6 +44,7 @@
             gap: 20px;
             z-index: 10;
             box-shadow: 2px 0 10px rgba(0,0,0,0.3);
+            flex-shrink: 0;
         }
 
         .brand {
@@ -124,6 +125,12 @@
             transform: translateY(1px);
         }
 
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
         .btn-primary {
             background-color: var(--accent);
             border-color: var(--accent);
@@ -146,6 +153,36 @@
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 10px;
+        }
+
+        .zoom-controls {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #1a1a1a;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 5px;
+        }
+        
+        .zoom-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-main);
+            padding: 5px 10px;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+        
+        .zoom-btn:hover {
+            background: rgba(255,255,255,0.1);
+        }
+
+        .zoom-level {
+            font-size: 0.85rem;
+            font-family: monospace;
+            min-width: 50px;
+            text-align: center;
         }
 
         /* Instructions Panel */
@@ -178,6 +215,7 @@
             flex: 1;
             position: relative;
             background-color: #121212;
+            /* Checkboard background for transparency */
             background-image: 
                 linear-gradient(45deg, #1a1a1a 25%, transparent 25%), 
                 linear-gradient(-45deg, #1a1a1a 25%, transparent 25%), 
@@ -189,22 +227,29 @@
             align-items: center;
             justify-content: center;
             overflow: hidden;
+            cursor: default;
         }
 
-        /* Container for canvases to stack them */
+        /* Container for canvases */
         .canvas-wrapper {
             position: relative;
-            box-shadow: 0 0 20px rgba(0,0,0,0.5);
-            max-width: 95%;
-            max-height: 95%;
+            box-shadow: 0 0 30px rgba(0,0,0,0.6);
+            transform-origin: center center;
+            /* Will be transformed by JS */
+            transition: transform 0.1s ease-out; 
+            cursor: crosshair;
+        }
+        
+        .canvas-wrapper.panning {
+            cursor: grab;
+        }
+        
+        .canvas-wrapper.panning:active {
+            cursor: grabbing;
         }
 
         canvas {
             display: block;
-            cursor: crosshair; /* Default cursor */
-            max-width: 100%;
-            max-height: 100%;
-            /* Prevents dragging the canvas element itself as an image */
             touch-action: none; 
         }
 
@@ -282,6 +327,21 @@
 
         <hr style="width: 100%; border: 0; border-top: 1px solid var(--border);">
 
+        <!-- Zoom Controls -->
+        <div class="control-group">
+            <label>Zoom</label>
+            <div class="zoom-controls">
+                <button class="zoom-btn" id="zoomOut" title="Zoom Out">-</button>
+                <span class="zoom-level" id="zoomDisplay">100%</span>
+                <button class="zoom-btn" id="zoomIn" title="Zoom In">+</button>
+            </div>
+            <button class="btn btn-secondary" id="zoomFit" style="margin-top: 5px; font-size: 0.8rem; padding: 6px;">
+                Fit to Screen
+            </button>
+        </div>
+
+        <hr style="width: 100%; border: 0; border-top: 1px solid var(--border);">
+
         <!-- Brush Controls -->
         <div class="control-group">
             <label>Brush Size <span class="value-display" id="sizeVal">30px</span></label>
@@ -316,10 +376,11 @@
 
         <!-- Instructions -->
         <div class="instructions">
-            <p><strong>How to use:</strong></p>
-            <p>1. <span class="kbd">Alt</span> + Click to set the source area.</p>
-            <p>2. Click & Drag to paint pixels from the source.</p>
-            <p>3. Adjust size/opacity for seamless blending.</p>
+            <p><strong>Controls:</strong></p>
+            <p>• <span class="kbd">Alt</span> + Click: Set Source</p>
+            <p>• <span class="kbd">Drag</span>: Paint (Clone)</p>
+            <p>• <span class="kbd">Space</span> + Drag: Pan View</p>
+            <p>• <span class="kbd">Wheel</span>: Zoom In/Out</p>
         </div>
     </aside>
 
@@ -336,7 +397,7 @@
 
     <script>
         /**
-         * Clone Stamp Tool Logic
+         * Clone Stamp Tool Logic with Zoom and Pan
          */
         
         // DOM Elements
@@ -346,10 +407,17 @@
         const undoBtn = document.getElementById('undoBtn');
         const resetBtn = document.getElementById('resetBtn');
         const canvasWrapper = document.getElementById('canvasWrapper');
+        const workspace = document.querySelector('.workspace');
         const imageCanvas = document.getElementById('imageCanvas');
         const cursorCanvas = document.getElementById('cursorCanvas');
         const ctx = imageCanvas.getContext('2d', { willReadFrequently: true });
-        const cCtx = cursorCanvas.getContext('2d'); // Cursor Overlay
+        const cCtx = cursorCanvas.getContext('2d');
+
+        // Zoom Controls
+        const zoomInBtn = document.getElementById('zoomIn');
+        const zoomOutBtn = document.getElementById('zoomOut');
+        const zoomFitBtn = document.getElementById('zoomFit');
+        const zoomDisplay = document.getElementById('zoomDisplay');
 
         // Inputs
         const brushSizeInput = document.getElementById('brushSize');
@@ -362,14 +430,16 @@
         // State Variables
         let isDrawing = false;
         let isAltPressed = false;
+        let isSpacePressed = false;
+        let isPanning = false;
         let hasImage = false;
         let history = [];
         let historyStep = -1;
         const maxHistory = 20;
 
         // Clone Tool Specifics
-        let sourcePoint = { x: 0, y: 0 }; // The coordinate on the image to clone FROM
-        let dragStartPoint = { x: 0, y: 0 }; // Where the mouse was when we started dragging
+        let sourcePoint = { x: 0, y: 0 };
+        let dragStartPoint = { x: 0, y: 0 };
         let isSourceSet = false;
 
         // Brush settings
@@ -377,18 +447,20 @@
         let brushOpacity = 1.0;
         let brushHardness = 0.8;
 
-        // Canvas sizing variables
-        let offsetX = 0;
-        let offsetY = 0;
-        let scale = 1;
+        // Zoom and Pan State
+        let zoom = 1.0;
+        let pan = { x: 0, y: 0 };
+        let baseScale = 1.0; // The scale needed to fit image initially
+        let minZoom = 0.1;
+        let maxZoom = 20.0;
+        let panStart = { x: 0, y: 0 }; // For panning drag
 
         // --- Initialization ---
 
         function init() {
-            // Setup initial placeholder or empty state
             canvasWrapper.style.display = 'none';
             
-            // Event Listeners
+            // File Listeners
             uploadBtn.addEventListener('click', () => fileInput.click());
             fileInput.addEventListener('change', handleImageUpload);
             downloadBtn.addEventListener('click', downloadImage);
@@ -410,14 +482,25 @@
                 hardnessVal.textContent = e.target.value + '%';
             });
 
-            // Mouse/Touch Interaction on Canvas Wrapper
-            // We attach to wrapper to capture events even if mouse drifts slightly
+            // Zoom Listeners
+            zoomInBtn.addEventListener('click', () => adjustZoom(1.2));
+            zoomOutBtn.addEventListener('click', () => adjustZoom(0.8));
+            zoomFitBtn.addEventListener('click', fitToScreen);
+
+            // Keyboard Interaction
             window.addEventListener('keydown', handleKeyDown);
             window.addEventListener('keyup', handleKeyUp);
             
-            imageCanvas.addEventListener('mousedown', onMouseDown);
-            window.addEventListener('mousemove', onMouseMove); // Window to catch drags outside
+            // Mouse/Touch Interaction
+            window.addEventListener('mousemove', onMouseMove); 
             window.addEventListener('mouseup', onMouseUp);
+            
+            // Wheel Zoom
+            workspace.addEventListener('wheel', handleWheel, { passive: false });
+
+            // Initial Cursor Canvas setup
+            cursorCanvas.width = 100;
+            cursorCanvas.height = 100;
         }
 
         // --- Image Handling ---
@@ -438,78 +521,174 @@
         }
 
         function setupCanvas(img) {
-            // Set canvas size to match image actual size
             imageCanvas.width = img.width;
             imageCanvas.height = img.height;
             cursorCanvas.width = img.width;
             cursorCanvas.height = img.height;
 
-            // Draw image
             ctx.drawImage(img, 0, 0);
 
-            // Reset state
             hasImage = true;
             canvasWrapper.style.display = 'block';
             isSourceSet = false;
             downloadBtn.disabled = false;
             resetBtn.disabled = false;
             
-            // Clear history and save initial state
             history = [];
             historyStep = -1;
             saveState();
 
-            // Fit canvas to view logic is handled by CSS max-width/height,
-            // but we need to calculate offset/scale for mouse events.
-            updateScaleInfo();
+            fitToScreen();
         }
 
-        function updateScaleInfo() {
-            const rect = imageCanvas.getBoundingClientRect();
-            scale = imageCanvas.width / rect.width;
+        function fitToScreen() {
+            if (!hasImage) return;
+            
+            const wsWidth = workspace.clientWidth;
+            const wsHeight = workspace.clientHeight;
+            const imgWidth = imageCanvas.width;
+            const imgHeight = imageCanvas.height;
+
+            // Calculate scale to fit with some padding
+            const scaleX = (wsWidth - 40) / imgWidth;
+            const scaleY = (wsHeight - 40) / imgHeight;
+            baseScale = Math.min(scaleX, scaleY);
+            
+            // Don't zoom in if image is tiny
+            baseScale = Math.min(baseScale, 1.0); 
+
+            zoom = 1.0; // Reset relative zoom
+            pan = { x: 0, y: 0 };
+            
+            updateTransform();
         }
 
-        window.addEventListener('resize', () => {
-            if(hasImage) updateScaleInfo();
-        });
+        function adjustZoom(factor) {
+            if (!hasImage) return;
+            const newZoom = Math.min(Math.max(minZoom, zoom * factor), maxZoom);
+            if (newZoom === zoom) return;
+            zoom = newZoom;
+            updateTransform();
+        }
+
+        function updateTransform() {
+            if (!hasImage) return;
+            const totalScale = baseScale * zoom;
+            
+            // Apply CSS transform
+            canvasWrapper.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${totalScale})`;
+            
+            // Update UI
+            zoomDisplay.textContent = Math.round(zoom * 100) + '%';
+            
+            // Redraw cursor to adjust line width/size based on new zoom
+            drawCursorOverlay();
+        }
+
+        function handleWheel(e) {
+            if (!hasImage) return;
+            if (e.ctrlKey) {
+                e.preventDefault(); // Prevent browser zoom
+            }
+            
+            // Check if hovering over canvas (or workspace)
+            if(e.target.closest('.workspace')) {
+                e.preventDefault();
+                
+                const delta = e.deltaY > 0 ? 0.9 : 1.1;
+                const oldZoom = zoom;
+                let newZoom = zoom * delta;
+                newZoom = Math.min(Math.max(minZoom, newZoom), maxZoom);
+                
+                if (newZoom !== oldZoom) {
+                    // Zoom towards mouse pointer logic
+                    // 1. Get mouse pos relative to workspace center
+                    const rect = workspace.getBoundingClientRect();
+                    const mouseX = e.clientX - rect.left - rect.width/2;
+                    const mouseY = e.clientY - rect.top - rect.height/2;
+
+                    // 2. Adjust pan so the point under mouse remains static
+                    // formula: newOffset = mouse - (mouse - oldOffset) * (newScale / oldScale)
+                    const scaleRatio = (newZoom / oldZoom);
+                    
+                    pan.x = mouseX - (mouseX - pan.x) * scaleRatio;
+                    pan.y = mouseY - (mouseY - pan.y) * scaleRatio;
+                    
+                    zoom = newZoom;
+                    updateTransform();
+                }
+            }
+        }
 
         // --- Interaction Logic ---
 
         function handleKeyDown(e) {
+            if (e.code === 'Space' && !isSpacePressed) {
+                isSpacePressed = true;
+                if (hasImage) canvasWrapper.classList.add('panning');
+            }
             if (e.key === 'Alt') {
                 isAltPressed = true;
-                imageCanvas.style.cursor = 'crosshair'; // Could be a specific "source" cursor
                 drawCursorOverlay();
             }
-            // Undo shortcut (Ctrl+Z)
             if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
                 e.preventDefault();
                 undo();
             }
+            // Zoom shortcuts
+            if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
+                e.preventDefault();
+                adjustZoom(1.2);
+            }
+            if ((e.ctrlKey || e.metaKey) && e.key === '-') {
+                e.preventDefault();
+                adjustZoom(0.8);
+            }
         }
 
         function handleKeyUp(e) {
+            if (e.code === 'Space') {
+                isSpacePressed = false;
+                isPanning = false;
+                if (hasImage) canvasWrapper.classList.remove('panning');
+            }
             if (e.key === 'Alt') {
                 isAltPressed = false;
-                imageCanvas.style.cursor = 'crosshair';
                 drawCursorOverlay();
             }
         }
 
+        // Attach mousedown to canvas wrapper to capture events
+        canvasWrapper.addEventListener('mousedown', onMouseDown);
+
         function getMousePos(e) {
+            // We rely on getBoundingClientRect which respects CSS transforms
+            // This makes the math trivial: (screenX - canvasScreenLeft) * (canvasWidth / canvasScreenWidth)
             const rect = imageCanvas.getBoundingClientRect();
+            
+            // Handle case where canvas is off screen
+            if (rect.width === 0 || rect.height === 0) return { x: 0, y: 0 };
+
             return {
-                x: (e.clientX - rect.left) * scale,
-                y: (e.clientY - rect.top) * scale
+                x: (e.clientX - rect.left) * (imageCanvas.width / rect.width),
+                y: (e.clientY - rect.top) * (imageCanvas.height / rect.height)
             };
         }
 
         function onMouseDown(e) {
             if (!hasImage) return;
+            
+            // Panning Logic (Space + Drag)
+            if (isSpacePressed) {
+                isPanning = true;
+                panStart = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+                return;
+            }
+
             const pos = getMousePos(e);
 
+            // Source Selection Logic (Alt + Click)
             if (e.altKey || isAltPressed) {
-                // Set Source Point
                 sourcePoint = { x: pos.x, y: pos.y };
                 isSourceSet = true;
                 drawCursorOverlay();
@@ -517,7 +696,7 @@
                 return;
             }
 
-            // Start Cloning
+            // Drawing Logic
             if (!isSourceSet) {
                 showToast('Alt+Click first to set source!');
                 return;
@@ -525,18 +704,22 @@
 
             isDrawing = true;
             dragStartPoint = { x: pos.x, y: pos.y };
-            
-            // Save state for Undo before we start drawing
             saveState();
-            
             performClone(pos.x, pos.y);
         }
 
         function onMouseMove(e) {
             if (!hasImage) return;
-            const pos = getMousePos(e);
-            
-            // Check if inside canvas roughly to update cursor
+
+            // Panning
+            if (isPanning && isSpacePressed) {
+                pan.x = e.clientX - panStart.x;
+                pan.y = e.clientY - panStart.y;
+                updateTransform(); // This updates visual position
+                return; // Don't draw cursor while panning
+            }
+
+            // Calculate if over canvas
             const rect = imageCanvas.getBoundingClientRect();
             const isInBounds = e.clientX >= rect.left && e.clientX <= rect.right && 
                                e.clientY >= rect.top && e.clientY <= rect.bottom;
@@ -545,6 +728,8 @@
                 cCtx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
                 return;
             }
+
+            const pos = getMousePos(e);
 
             if (isDrawing) {
                 performClone(pos.x, pos.y);
@@ -555,18 +740,15 @@
 
         function onMouseUp(e) {
             isDrawing = false;
+            isPanning = false;
         }
 
         // --- Core Clone Stamp Logic ---
 
-        // Offscreen canvas for brush shape handling
         const tempCanvas = document.createElement('canvas');
         const tCtx = tempCanvas.getContext('2d');
 
         function performClone(targetX, targetY) {
-            // Calculate Source Position based on offset
-            // dx = targetX - dragStartX
-            // sourceX = originalSourceX + dx
             const dx = targetX - dragStartPoint.x;
             const dy = targetY - dragStartPoint.y;
 
@@ -575,40 +757,34 @@
 
             const r = brushSize / 2;
 
-            // Setup temp canvas for the brush tip
             tempCanvas.width = brushSize;
             tempCanvas.height = brushSize;
             tCtx.clearRect(0, 0, brushSize, brushSize);
 
-            // 1. Draw the image area from source onto temp canvas
-            // We draw from imageCanvas so we can clone over already cloned parts (recursive)
+            // 1. Copy pixels from source
             tCtx.drawImage(
                 imageCanvas, 
-                sourceX - r, sourceY - r, brushSize, brushSize, // Source rect
-                0, 0, brushSize, brushSize // Dest rect
+                sourceX - r, sourceY - r, brushSize, brushSize, 
+                0, 0, brushSize, brushSize
             );
 
-            // 2. Apply Brush Mask (Gradient for Hardness)
-            // We use 'destination-in' to keep parts of the image that overlap with the brush alpha
+            // 2. Create Mask
             tCtx.globalCompositeOperation = 'destination-in';
             
-            const gradient = tCtx.createRadialGradient(r, r, r * (1 - brushHardness), r, r, r);
-            gradient.addColorStop(0, 'rgba(0,0,0,1)');
-            gradient.addColorStop(1, 'rgba(0,0,0,0)'); // Fully transparent at edge for softness
-            
-            // If hardness is 100%, we want a sharp circle, but the gradient approach is still easiest
-            // Actually for 100% hardness, we can just fill a circle.
             if (brushHardness >= 0.99) {
-                tCtx.fillStyle = '#000'; // Color doesn't matter, alpha does
+                tCtx.fillStyle = '#000';
                 tCtx.beginPath();
                 tCtx.arc(r, r, r, 0, Math.PI * 2);
                 tCtx.fill();
             } else {
+                const gradient = tCtx.createRadialGradient(r, r, r * (1 - brushHardness), r, r, r);
+                gradient.addColorStop(0, 'rgba(0,0,0,1)');
+                gradient.addColorStop(1, 'rgba(0,0,0,0)');
                 tCtx.fillStyle = gradient;
                 tCtx.fillRect(0, 0, brushSize, brushSize);
             }
 
-            // 3. Draw the masked brush tip onto the main canvas
+            // 3. Apply to canvas
             ctx.globalAlpha = brushOpacity;
             ctx.globalCompositeOperation = 'source-over';
             ctx.drawImage(
@@ -617,92 +793,94 @@
                 targetX - r, targetY - r, brushSize, brushSize
             );
             
-            // Reset context
             ctx.globalAlpha = 1.0;
         }
 
-        // --- Cursor Overlay Logic ---
+        // --- Cursor Overlay Logic (Zoom Aware) ---
 
         function drawCursorOverlay(mouseX, mouseY) {
             cCtx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
 
-            // If mouse not provided (e.g., just update via slider), don't draw circle, just clean up
-            // But we need to draw the source marker if set.
+            // Calculate Current Visual Scale
+            // We need this to keep the cursor looking consistent on screen
+            const rect = imageCanvas.getBoundingClientRect();
+            // How many screen pixels is one image pixel?
+            const pixelRatio = rect.width / imageCanvas.width; 
 
-            // Draw Source Marker
             if (isSourceSet) {
                 const s = sourcePoint;
+                // Draw Source Marker
+                // The source marker should also scale, but we want lines to remain 1px on screen
+                // So we divide line width by pixelRatio
+                const lw = 1 / pixelRatio;
                 
-                // Draw crosshair at source
                 cCtx.strokeStyle = '#fff';
-                cCtx.lineWidth = 1;
+                cCtx.lineWidth = lw;
                 cCtx.beginPath();
-                cCtx.moveTo(s.x - 10, s.y);
-                cCtx.lineTo(s.x + 10, s.y);
-                cCtx.moveTo(s.x, s.y - 10);
-                cCtx.lineTo(s.x, s.y + 10);
+                cCtx.moveTo(s.x - 10/pixelRatio, s.y);
+                cCtx.lineTo(s.x + 10/pixelRatio, s.y);
+                cCtx.moveTo(s.x, s.y - 10/pixelRatio);
+                cCtx.lineTo(s.x, s.y + 10/pixelRatio);
                 cCtx.stroke();
 
-                // Draw "Ghost" circle at source to show alignment
                 cCtx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
                 cCtx.beginPath();
-                cCtx.arc(s.x, s.y, brushSize / 2, 0, Math.PI * 2);
+                cCtx.arc(s.x, s.y, (brushSize / 2), 0, Math.PI * 2);
                 cCtx.stroke();
             }
 
-            // Draw Brush Cursor at Mouse Position
             if (mouseX !== undefined && mouseY !== undefined) {
+                // Draw Brush Cursor
+                // We want the brush circle to represent the actual brush size in image pixels.
+                // So we just draw at brushSize.
+                // BUT, the border width needs to be 1px on screen.
+                
+                const lw = 1 / pixelRatio;
+                
                 cCtx.strokeStyle = '#000';
-                cCtx.lineWidth = 2;
+                cCtx.lineWidth = lw + 1/pixelRatio; // slightly thicker for visibility
                 cCtx.beginPath();
                 cCtx.arc(mouseX, mouseY, brushSize / 2, 0, Math.PI * 2);
                 cCtx.stroke();
 
-                cCtx.strokeStyle = '#fff'; // Inner white line for contrast
-                cCtx.lineWidth = 1;
-                cCtx.setLineDash([5, 5]); // Dashed line for brush
+                cCtx.strokeStyle = '#fff';
+                cCtx.lineWidth = lw;
+                cCtx.setLineDash([5/pixelRatio, 5/pixelRatio]); // Dashed pattern scales too
                 cCtx.stroke();
-                cCtx.setLineDash([]); // Reset
+                cCtx.setLineDash([]);
 
-                // If Alt is pressed, we are setting source, so draw text
                 if (isAltPressed) {
                     cCtx.fillStyle = '#fff';
-                    cCtx.font = '12px sans-serif';
-                    cCtx.fillText("Set Source", mouseX + 10, mouseY - 10);
+                    // Font size should be constant on screen
+                    const fontSize = 12 / pixelRatio; 
+                    cCtx.font = `${fontSize}px sans-serif`;
+                    cCtx.fillText("Set Source", mouseX + 10/pixelRatio, mouseY - 10/pixelRatio);
                 }
             }
         }
 
-        // --- History (Undo) ---
+        // --- History ---
 
         function saveState() {
-            // Remove future history if we were in the middle of the stack
             if (historyStep < history.length - 1) {
                 history = history.slice(0, historyStep + 1);
             }
-
-            // Push current state
             history.push(ctx.getImageData(0, 0, imageCanvas.width, imageCanvas.height));
             historyStep++;
-
-            // Limit history size
             if (history.length > maxHistory) {
                 history.shift();
                 historyStep--;
             }
-
             updateUndoButton();
         }
 
         function undo() {
             if (historyStep > 0) {
                 historyStep--;
-                const imageData = history[historyStep];
-                ctx.putImageData(imageData, 0, 0);
+                ctx.putImageData(history[historyStep], 0, 0);
                 updateUndoButton();
             } else if (historyStep === 0) {
-                 // Initial state
-                 resetImage(); 
+                resetImage();
             }
         }
 
@@ -716,7 +894,7 @@
                 history = [history[0]];
                 historyStep = 0;
                 updateUndoButton();
-                isSourceSet = false; // Reset source on full reset
+                isSourceSet = false;
                 drawCursorOverlay();
             }
         }
@@ -743,9 +921,7 @@
             }, duration);
         }
 
-        // Run
         init();
-
     </script>
 </body>
 </html>
