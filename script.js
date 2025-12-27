@@ -123,6 +123,10 @@ function handleImageUpload(e) {
 }
 
 function setupCanvas(img) {
+    // Hide welcome message
+    const welcome = document.getElementById('welcomeMessage');
+    if (welcome) welcome.style.display = 'none';
+
     imageCanvas.width = img.width;
     imageCanvas.height = img.height;
     cursorCanvas.width = img.width;
