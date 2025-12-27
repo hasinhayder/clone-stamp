@@ -302,7 +302,7 @@
                 <path d="M2 2l7.586 7.586"></path>
                 <circle cx="11" cy="11" r="2"></circle>
             </svg>
-            CloneRemover
+            Stamp Clone
         </div>
 
         <!-- File Operations -->
@@ -379,7 +379,7 @@
             <p><strong>Controls:</strong></p>
             <p>• <span class="kbd">Alt</span> + Click: Set Source</p>
             <p>• <span class="kbd">Drag</span>: Paint (Clone)</p>
-            <p>• <span class="kbd">Space</span> + Drag: Pan View</p>
+            <p>• <span class="kbd">Shift</span> + Drag: Pan View</p>
             <p>• <span class="kbd">Wheel</span>: Zoom In/Out</p>
         </div>
     </aside>
@@ -430,7 +430,7 @@
         // State Variables
         let isDrawing = false;
         let isAltPressed = false;
-        let isSpacePressed = false;
+        let isShiftPressed = false;
         let isPanning = false;
         let hasImage = false;
         let history = [];
@@ -623,8 +623,8 @@
         // --- Interaction Logic ---
 
         function handleKeyDown(e) {
-            if (e.code === 'Space' && !isSpacePressed) {
-                isSpacePressed = true;
+            if (e.key === 'Shift' && !isShiftPressed) {
+                isShiftPressed = true;
                 if (hasImage) canvasWrapper.classList.add('panning');
             }
             if (e.key === 'Alt') {
@@ -647,8 +647,8 @@
         }
 
         function handleKeyUp(e) {
-            if (e.code === 'Space') {
-                isSpacePressed = false;
+            if (e.key === 'Shift') {
+                isShiftPressed = false;
                 isPanning = false;
                 if (hasImage) canvasWrapper.classList.remove('panning');
             }
@@ -678,8 +678,8 @@
         function onMouseDown(e) {
             if (!hasImage) return;
             
-            // Panning Logic (Space + Drag)
-            if (isSpacePressed) {
+            // Panning Logic (Shift + Drag)
+            if (isShiftPressed) {
                 isPanning = true;
                 panStart = { x: e.clientX - pan.x, y: e.clientY - pan.y };
                 return;
@@ -712,7 +712,7 @@
             if (!hasImage) return;
 
             // Panning
-            if (isPanning && isSpacePressed) {
+            if (isPanning && isShiftPressed) {
                 pan.x = e.clientX - panStart.x;
                 pan.y = e.clientY - panStart.y;
                 updateTransform(); // This updates visual position
