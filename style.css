@@ -372,21 +372,25 @@ canvas {
     width: 100%;
 }
 
-.welcome-credits {
-    margin-top: -20px;
-    margin-bottom: 30px;
-    font-size: 0.9rem;
+.welcome-footer {
+    margin-top: 25px;
+    font-size: 0.85rem;
     color: var(--text-muted);
 }
 
-.welcome-credits a {
+.welcome-footer a {
     color: var(--accent);
     text-decoration: none;
     font-weight: 600;
 }
 
-.welcome-credits a:hover {
+.welcome-footer a:hover {
     text-decoration: underline;
+}
+
+.heart {
+    color: #e74c3c;
+    font-size: 1rem;
 }
 
 .sidebar-footer {
