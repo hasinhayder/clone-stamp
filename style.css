@@ -28,7 +28,7 @@ body {
 
 /* --- Sidebar --- */
 .sidebar {
-    width: 280px;
+    width: 310px;
     background-color: var(--bg-panel);
     border-right: 1px solid var(--border);
     display: flex;
